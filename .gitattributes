@@ -1,0 +1,15 @@
+data/filter_text.py filter=lfs diff=lfs merge=lfs -text
+data/get_char_data.py filter=lfs diff=lfs merge=lfs -text
+data/alignments filter=lfs diff=lfs merge=lfs -text
+data/extract_links.py filter=lfs diff=lfs merge=lfs -text
+data/extract_wiki_titles.py filter=lfs diff=lfs merge=lfs -text
+data/filter_data.sh filter=lfs diff=lfs merge=lfs -text
+data/extract_alignments.py filter=lfs diff=lfs merge=lfs -text
+data/make_csv.py filter=lfs diff=lfs merge=lfs -text
+data/parsed_tmx_dir filter=lfs diff=lfs merge=lfs -text
+data/parse_tmx2txt.py filter=lfs diff=lfs merge=lfs -text
+data/get_lang_data.py filter=lfs diff=lfs merge=lfs -text
+data/prep_text.py filter=lfs diff=lfs merge=lfs -text
+data/seq2seq_inference filter=lfs diff=lfs merge=lfs -text
+data/tmx_dir filter=lfs diff=lfs merge=lfs -text
+data/fast_align filter=lfs diff=lfs merge=lfs -text
