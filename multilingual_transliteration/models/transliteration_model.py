@@ -217,8 +217,8 @@ class TransliterationModel():
             
             src, trg, src_text ,tgt_text = data
             
-            src = src.T.to(self.device)
-            trg = trg.T.to(self.device)
+            src = src.T.to(self.device).long()
+            trg = trg.T.to(self.device).long()
             
             # make source pad mask
             src_mask = (src == self.pad_token).transpose(0,1)
@@ -301,11 +301,8 @@ class TransliterationModel():
             
             src, trg, src_text, tgt_text = data
             
-            src = src.type(torch.LongTensor)
-            trg = trg.type(torch.LongTensor)
-            
-            src = src.T.to(self.device)
-            trg = trg.T.to(self.device)
+            src = src.T.to(self.device).long()
+            trg = trg.T.to(self.device).long()
             
             # make source pad mask
             src_mask = (src == self.pad_token).transpose(0,1)

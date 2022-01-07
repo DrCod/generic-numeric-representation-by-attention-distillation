@@ -204,8 +204,8 @@ class Encoder(nn.Module):
                 embedder_slice_count : int = 0,
                 embedder_bucket_count : int = 0,
                 window_size : int = 0,
-                token_embedder_type  : str = "hashing",
-                pos_embedder_type : str = "canine",
+                token_embedder  : nn.Module = None,
+                pos_embedder : nn.Module = None,
                 activation = "relu"
                 ):
         
@@ -216,25 +216,25 @@ class Encoder(nn.Module):
         if activation not in ['relu', 'gelu']: RuntimeError(f"Invalid activation. Expects relu/gelu but got {activation}")
         else: self.activation = activation
 
-        self.token_embedder_type = token_embedder_type
-        self.pos_embedder_type = pos_embedder_type
+        self.token_embedder = token_embedder
+        self.pos_embedder = pos_embedder
 
-        if pos_embedder_type == "normal":
-            self.scale = torch.sqrt(torch.FloatTensor([hidden_dim])).to(device)
+#         if pos_embedder_type == "normal":
+        self.scale = torch.sqrt(torch.FloatTensor([hidden_dim])).to(device)
         
-        if token_embedder_type == "hashing":
-            self.token_embedder = MultiHashingEmbedder(hidden_dim, slice_count= embedder_slice_count, bucket_count =  embedder_bucket_count)
-        elif token_embedder_type == "normal":
-            self.token_embedder = nn.Embedding(input_dim, hidden_dim)
-        else:
-            RuntimeError(f"Invalid token embedder selected. Expected hashing/None")
+#         if token_embedder_type == "hashing":
+#             self.token_embedder = MultiHashingEmbedder(hidden_dim, slice_count= embedder_slice_count, bucket_count =  embedder_bucket_count)
+#         elif token_embedder_type == "normal":
+#             self.token_embedder = nn.Embedding(input_dim, hidden_dim)
+#         else:
+#             RuntimeError(f"Invalid token embedder selected. Expected hashing/None")
 
-        if pos_embedder_type == "canine":
-            self.position_embedder = PositionEmbedding(max_length, hidden_dim)
-        elif pos_embedder_type == "attn_paper":
-            self.position_embedder = PositionalEncoding(hidden_dim, dropout, max_length)
-        else:
-            RuntimeError(f"Invalid position embedder selected. Expected Canine/None")
+#         if pos_embedder_type == "canine":
+#             self.position_embedder = PositionEmbedding(max_length, hidden_dim)
+#         elif pos_embedder_type == "attn_paper":
+#             self.position_embedder = PositionalEncoding(hidden_dim, dropout, max_length)
+#         else:
+#             RuntimeError(f"Invalid position embedder selected. Expected Canine/None")
 
         if not use_local_self_attention:
             self.layers = nn.ModuleList([EncoderLayer(hidden_dim,
@@ -268,13 +268,14 @@ class Encoder(nn.Module):
         batch_size = src.shape[0]
         src_len    = src.shape[1]
 
-        if self.pos_embedder_type == "attn_paper":
-            pos = torch.arange(0, src_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
-            # pos = [bs, src_len]
-            src = self.dropout(self.token_embedder(src)*self.scale) + self.position_embedder(pos)
-        else:
-            src = self.position_embedder(self.token_embedder(src))
-            src = self.dropout(src)
+#         if self.pos_embedder_type == "attn_paper":
+        pos = torch.arange(0, src_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
+        # pos = [bs, src_len]
+        src = self.dropout(self.token_embedder(src)*self.scale) + self.position_embedder(pos)
+        
+#         else:
+#             src = self.position_embedder(self.token_embedder(src))
+#             src = self.dropout(src)
 
         # src = [bs, src_len, hidden_dim]
         for L in self.layers:
@@ -365,8 +366,8 @@ class Decoder(nn.Module):
                 max_length,
                 embedder_slice_count : int = 0,
                 embedder_bucket_count : int = 0,
-                token_embedder_type  : str = "hashing",
-                pos_embedder_type : str = "canine",
+                token_embedder  : nn.Module = None,
+                pos_embedder : nn.Module = None,
                 use_local_self_attention = False,
                 activation = "relu"
                 ):
@@ -377,23 +378,23 @@ class Decoder(nn.Module):
         if activation not in ['relu', 'gelu']: RuntimeError(f"Invalid activation received. expects relu/gelu but got {activation}")
         else: self.activation = activation
             
-        self.token_embedder_type = token_embedder_type
-        self.pos_embedder_type   = pos_embedder_type
+        self.token_embedder = token_embedder
+        self.pos_embedder   = pos_embedder
         
-        if token_embedder_type == "hashing":
-            self.token_embedder = MultiHashingEmbedder(hidden_dim,\
-                                                            slice_count= embedder_slice_count, bucket_count =  embedder_bucket_count)
-        elif token_embedder_type == "normal":
-            self.token_embedder = nn.Embedding(output_dim, hidden_dim)
-        else:
-            RuntimeError(f"Invalid token embedder selected but expects Hashing/None")
-            
-        if pos_embedder_type == "canine":
-             self.position_embedder = PositionEmbedding(max_length, hidden_dim)
-        elif pos_embedder_type == "attn_paper":
-            self.position_embedder = PositionalEncoding(hidden_dim, dropout, max_length)
-        else:
-            RuntimeError(f"Invalid position embedder selected but expects Canine/None")
+        #         if token_embedder_type == "hashing":
+        #             self.token_embedder = MultiHashingEmbedder(hidden_dim,\
+        #                                                             slice_count= embedder_slice_count, bucket_count =  embedder_bucket_count)
+        #         elif token_embedder_type == "normal":
+        #             self.token_embedder = nn.Embedding(output_dim, hidden_dim)
+        #         else:
+        #             RuntimeError(f"Invalid token embedder selected but expects Hashing/None")
+
+        #         if pos_embedder_type == "canine":
+        #              self.position_embedder = PositionEmbedding(max_length, hidden_dim)
+        #         elif pos_embedder_type == "attn_paper":
+        #             self.position_embedder = PositionalEncoding(hidden_dim, dropout, max_length)
+        #         else:
+        #             RuntimeError(f"Invalid position embedder selected but expects Canine/None")
         
         if not use_local_self_attention:
             self.layers = nn.ModuleList([DecoderLayer(hidden_dim,
@@ -419,8 +420,8 @@ class Decoder(nn.Module):
         self.fc_out = nn.Linear(hidden_dim, output_dim)
         self.dropout = nn.Dropout(dropout)
         
-        if self.pos_embedder_type == "attn_paper":
-            self.scale = torch.sqrt(torch.FloatTensor([hidden_dim])).to(device)        
+#         if self.pos_embedder_type == "attn_paper":
+        self.scale = torch.sqrt(torch.FloatTensor([hidden_dim])).to(device)        
         
 
     def forward(self, tgt, enc_src, tgt_mask, src_mask):
@@ -433,18 +434,18 @@ class Decoder(nn.Module):
         batch_size = tgt.shape[0]
         tgt_len    = tgt.shape[1]
 
-        if self.pos_embedder_type == "attn_paper":
-            pos  = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size, 1).to(self.device)
+#         if self.pos_embedder_type == "attn_paper":
+        pos  = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size, 1).to(self.device)
 
         # pos = [bs, tgt_len]
 
-        if self.pos_embedder_type == "attn_paper":
-            pos = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
-            # pos = [bs, tgt_len]
-            tgt = self.dropout(self.token_embedder(tgt)*self.scale) + self.position_embedder(pos)
-        else:
-            tgt = self.position_embedder(self.token_embedder(tgt))
-            tgt = self.dropout(tgt) 
+#         if self.pos_embedder_type == "attn_paper":
+        pos = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
+        # pos = [bs, tgt_len]
+        tgt = self.dropout(self.token_embedder(tgt)*self.scale) + self.position_embedder(pos)
+#         else:
+#             tgt = self.position_embedder(self.token_embedder(tgt))
+#             tgt = self.dropout(tgt) 
 
         # tgt = [ bs, tgt_len, hidden_dim ]
 
@@ -541,8 +542,11 @@ class UniversalNumericalTransformer(nn.Module):
             
             
         if token_embedding_type == "hashing":
-            self.token_embedder = tok_embeddings[token_embedding_type](hidden_size, slice_count = embedder_slice_count, 
+            self.encoder_token_embedder = tok_embeddings[token_embedding_type](hidden_size, slice_count = embedder_slice_count, 
                                                                        bucket_count = embedder_bucket_count)
+            self.decoder_token_embedder = tok_embeddings[token_embedding_type](hidden_size, slice_count = embedder_slice_count, 
+                                                                       bucket_count = embedder_bucket_count)
+            
         elif token_embedding_type == "normal":
             self.encoder_token_embedder = tok_embeddings[token_embedding_type](self.intoken, hidden_size)
             self.decoder_token_embedder = tok_embeddings[token_embedding_type](self.outtoken, hidden_size)
@@ -635,8 +639,8 @@ class UniversalNumericalTransformer(nn.Module):
                         max_length = max_length,
                         embedder_slice_count = embedder_slice_count,
                         embedder_bucket_count  = embedder_bucket_count,
-                        token_embedder_type  = token_embedding_type,
-                        pos_embedder_type = position_embedding_type,
+                        token_embedder  = self.encoder_token_embedder,
+                        pos_embedder = self.position_embedder,
                         use_local_self_attention = None,
                         activation = activation
                         )
@@ -652,8 +656,8 @@ class UniversalNumericalTransformer(nn.Module):
                         max_length = max_length,
                         embedder_slice_count = embedder_slice_count,
                         embedder_bucket_count  = embedder_bucket_count,
-                        token_embedder_type  = token_embedding_type,
-                        pos_embedder_type = position_embedding_type,
+                        token_embedder  = self.decoder_token_embedder,
+                        pos_embedder = self.position_embedder,
                         use_local_self_attention = None,
                         activation = activation
                         )
@@ -681,7 +685,7 @@ class UniversalNumericalTransformer(nn.Module):
     
     
     def get_token_embedder(self):
-        return self.token_embedder if self.token_embedding_type =="hashing" else self.encoder_token_embedder
+        return self.encoder_token_embedder
     
     def get_position_encoder(self):
         return self.position_embedder
@@ -703,9 +707,9 @@ class UniversalNumericalTransformer(nn.Module):
         
         trg_mask = self._generate_square_subsequent_mask(len(tgt_input_ids)).to(tgt_input_ids.device)
         
-        char_embeddings = self.position_embedder(self.token_embedder(input_ids)) if self.token_embedding_type =='hashing' else self.position_embedder(self.encoder_token_embedder(input_ids))
+        char_embeddings = self.position_embedder(self.encoder_token_embedder(input_ids))
         
-        tgt_char_embeddings = self.position_embedder(self.token_embedder(tgt_input_ids)) if self.token_embedding_type == 'hashing' else self.position_embedder(self.decoder_token_embedder(tgt_input_ids))
+        tgt_char_embeddings = self.position_embedder(self.decoder_token_embedder(tgt_input_ids))
                 
     #         final_cls_embeddings = self.dropout(self.cls_linear(contextualized_chars[:, 0:1, :]))
         
