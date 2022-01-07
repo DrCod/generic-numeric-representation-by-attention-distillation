@@ -18,7 +18,7 @@ from .position_embedding import PositionEmbedding, PositionalEncoding
 from dataloader.dataloader import TransliterationDataset, collate_fn
 from .local_self_attention import LocalSelfAttention
 from .local_transformer_encoder_layer import LocalTransformerEncoderLayer
-from .UniNumTransformerModel import UniversalNumericalTransformer, UniversalNumericalConfig
+from .UniNumTransformerModel import UniversalNumericalTransformer
 from dataloader.custom_sampler import KSampler
 from sklearn.metrics import jaccard_score
 import time
@@ -27,6 +27,10 @@ import json
 import gc
 import json
 from pprint import pprint
+
+global device
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 """Create The Transformer Model using Local Attention Encoder
@@ -125,6 +129,7 @@ class TransliterationModel():
                                                    transformer_ff_size = args.transformer_ff_size,
                                                    max_length = max(self.in_max, self.out_max)
                                                   ).to(self.device) 
+        
         logging.info(f"Model {self.model}  created!")
         
         
@@ -197,7 +202,8 @@ class TransliterationModel():
         total_loss = 0
         train_acc = []
         cer_distances = []
-        
+        attn_labels = []
+    
         good_samples = {}
         
         start_time = time.time()
@@ -207,7 +213,10 @@ class TransliterationModel():
         
         for i , (data) in enumerate(pbar, start = start_iter):
             
+            correct_indices = []
+            
             src, trg, src_text ,tgt_text = data
+            
             src = src.T.to(self.device)
             trg = trg.T.to(self.device)
             
@@ -216,7 +225,11 @@ class TransliterationModel():
             # make target pad mask
             tgt_mask = (trg[:-1, :] == self.pad_token).transpose(0,1)
             
-            output = self.model(src, src_mask, trg[:-1, :], tgt_mask)['logits']
+            model_out = self.model(src, src_mask , trg[:-1, :], tgt_mask)
+            
+            output = model_out['logits']
+            attention_probs = model_out['attn_probas']
+            
             
             output = output.reshape(-1, output.shape[2])                                    
             optimizer.optimizer.zero_grad()
@@ -231,26 +244,38 @@ class TransliterationModel():
             results = self.transliterate_list(src_text)
             
             # get correct samples
-            for x_src, x_pred, x_tgt in list(zip(src_text, tgt_text, results)):
+            for idx, (x_src, x_pred, x_tgt) in enumerate(list(zip(src_text, tgt_text, results))):
+                
                 if x_pred == x_tgt:
                     good_samples[x_src] = x_tgt
-                    
                     # Generate attention labels for good samples
-                    _, attention = self.model.compute_attention_soft_labels(x_src, x_tgt)
+                    correct_indices.append(idx)
                     
-                    y_attn = F.adaptive_avg_pool2d(attention, (1, 1))
-                    
-                    
-        
+            # gather samples corresponding to correct indices
+            correct_indices = np.array(correct_indices)
+            correct_indices = torch.tensor(correct_indices, dtype = torch.long)
+            
+            #             src = src.gather(correct_indices, 1, attention_probs)
+            soft_attn_labels = trg.gather(correct_indices, 1, attention_probs)
+    
+            attn_labels.append(soft_attn_labels)
+                        
+            #             # make source pad mask
+            #             src_mask = (src == self.pad_token).transpose(0,1)
+            #             # make target pad mask
+            #             tgt_mask = (trg[:-1, :] == self.pad_token).transpose(0,1)
+
+            #             attn_labels.append(attn_prob)
+            
             train_cer = list(map(lambda x : calculate_cer(*x), list(zip(results, tgt_text))))
             
             cer_distances.append(np.mean(train_cer))
             
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             
 #             logging.info(f"Val batch --src {src_text} --tgt {tgt_text} --Model text {results}")
     
-        return total_loss / len(iterator), np.mean(cer_distances), good_samples
+        return total_loss / len(iterator), np.mean(cer_distances), good_samples, attn_labels
 
     def run_validation(self,epoch, iterator, criterion):
         """Get validation loss
@@ -264,6 +289,7 @@ class TransliterationModel():
         start_iter = 0
         total_loss = 0
         good_samples = {}
+        attn_labels = []
         
         start_time = time.time()
             
@@ -271,7 +297,13 @@ class TransliterationModel():
             
         for i, (data) in enumerate(pbar , start = start_iter):
             
+            correct_indices = []
+            
             src, trg, src_text, tgt_text = data
+            
+            src = src.type(torch.LongTensor)
+            trg = trg.type(torch.LongTensor)
+            
             src = src.T.to(self.device)
             trg = trg.T.to(self.device)
             
@@ -280,7 +312,10 @@ class TransliterationModel():
             # make target pad mask
             tgt_mask = (trg[:-1, :] == self.pad_token).transpose(0,1)
         
-            output = self.model(src, src_mask, trg[:-1, :], tgt_mask)['logits']
+            model_out = self.model(src, src_mask, trg[:-1, :], tgt_mask)
+            
+            output = model_out['logits']
+            attention_probs = model_out['attn_probas']
             
             output = output.reshape(-1, output.shape[2])
 
@@ -291,10 +326,23 @@ class TransliterationModel():
             results = self.transliterate_list(src_text)
             
             # get correct samples
-            for x_src, x_pred, x_tgt in list(zip(src_text, tgt_text, results)):
+            for idx, (x_src, x_pred, x_tgt) in enumerate(list(zip(src_text, tgt_text, results))):
                 if x_pred == x_tgt:
                     good_samples[x_src] = x_tgt
+                    correct_indices.append(idx)
 
+            # gather samples corresponding to correct indices
+            correct_indices = torch.tensor(correct_indices, dtype = torch.long)
+            
+            # src = src.gather(correct_indices, 1, src)
+            soft_attn_labels = trg.gather(correct_indices, 1, attention_probs)
+                        
+            # make source pad mask
+            # src_mask = (src == self.pad_token).transpose(0,1)
+            # make target pad mask
+            # tgt_mask = (trg[:-1, :] == self.pad_token).transpose(0,1)
+                        
+            attn_labels.append(soft_attn_labels)
                     
             val_cer = list(map(lambda x : calculate_cer(*x), list(zip(results, tgt_text))))
             cer_distances.append(np.mean(val_cer))
@@ -302,7 +350,7 @@ class TransliterationModel():
 #             logging.info(f"Val batch --src {src_text} --tgt {tgt_text} --Model text {results}")
     
     
-        return total_loss / len(iterator), np.mean(cer_distances), good_samples
+        return total_loss / len(iterator), np.mean(cer_distances), good_samples, attn_labels
 
     #Keep numbers block
     def split(self, text):
@@ -345,9 +393,9 @@ class TransliterationModel():
         tok_enc = self.model.get_token_embedder()
         encoder = self.model.get_transformer_encoder()
         decoder = self.model.get_transformer_decoder()
-        fc      =  self.model.get_fc()
+        fc      = self.model.get_fc()
         
-        result = []
+        result  = []
 
         #Sometimes all the words in a sentence exist in the known dict
         #So the returned phrase is empty, we check for that
@@ -481,12 +529,12 @@ class TransliterationModel():
         #Change model size
         for i in range(self.args.epochs):
             
-            loss, train_cer, train_samples = self.run_epoch(i, train_dataloader, optimizer, criterion)
+            loss, train_cer, train_samples, train_attn_probas = self.run_epoch(i, train_dataloader, optimizer, criterion)
             
             if self.args.gradient_accumulation_steps > 1:
                 loss /= self.args.gradient_accumulation_steps
             
-            loss_val, val_cer, val_samples = self.run_validation(i, valid_dataloader, criterion)
+            loss_val, val_cer, val_samples, val_attn_probas = self.run_validation(i, valid_dataloader, criterion)
             
             self.good_teacher_samples.update(val_samples)
             self.good_teacher_samples.update(train_samples)

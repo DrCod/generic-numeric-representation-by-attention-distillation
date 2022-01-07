@@ -10,18 +10,459 @@ import json
 import random
 import math
 
-def UniversalNumericalConfig(SimpleNamespace):
-    def to_dict(self):
-        out  = self.__dict__.copy()
-        del out['self']
-        return out        
-    def to_json_string(self):
-        return json.dump(self.to_dict())
+
+global device
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# MHSA Layer
+class MHSA(nn.Module):
+    
+    def __init__(self,
+                hidden_dim,
+                num_attn_heads,
+                dropout,
+#                 pos_embedder_type,
+                device):
+        
+        super(MHSA, self).__init__()
+        
+        assert hidden_dim % num_attn_heads == 0, "hidden_dim must be divisible by number of attention heads"
+        
+        self.hidden_dim = hidden_dim
+        self.num_attn_heads = num_attn_heads
+        self.attn_head_size = hidden_dim // num_attn_heads
+        
+        self.Q_fc = nn.Linear(hidden_dim, hidden_dim)
+        self.K_fc = nn.Linear(hidden_dim, hidden_dim)
+        self.V_fc = nn.Linear(hidden_dim, hidden_dim)
+        
+        self.fc_o = nn.Linear(hidden_dim, hidden_dim)
+        
+        self.dropout = nn.Dropout(dropout)
+        
+#         if pos_embedder_type == "attn_paper":
+        self.scale = torch.sqrt(torch.FloatTensor([self.attn_head_size])).to(device)
+    
+    def forward(self, query, key, value, mask = None):
+        
+        batchr_size = query.shape[0]
+
+        # query = [bs, query_len, hidden_dim]
+        # key =   [bs,   key_len,   hidden_dim]
+        # value = [bs, value_len, hidden_dim]
+        
+        Q = self.Q_fc(query)
+        K = self.K_fc(key)
+        V = self.V_fc(value)
+        
+        # Q = [bs, query_len, hidden_dim]
+        # K = [bs, key_len, hidden_dim]
+        # V = [bs, value_len, hidden_dim]
+        
+        Q = Q.view(batch_size, -1, self.num_attn_heads, self.attn_head_size)
+        K = K.view(batch_size, -1, self.num_attn_heads, self.attn_head_size)
+        V = V.view(batch_size, -1, self.num_attn_heads, self.attn_head_size)
+        
+        # Q = [bs, num_attn_heads, query_len, attn_head_size]
+        # K = [bs, num_attn_heads, key_len, attn_head_size]
+        # V = [bs, num_attn_heads ,value_len, attn_head_size]
+        
+        scores = torch.matmul(Q, K.permute(0,1, 3, 2)) / self.scale
+        
+        # scores = [bs, num_attn_heads, query_len, key_len ]
+        
+        if mask is not None:
+            scores =  scores.masked_fill(mask == 0, -1e10)
+            
+        attention = torch.softmax(scores, dim = -1)
+        
+        # attention = [bs, num_attn_heads, query_len, key_len]
+        x = torch.matmul(self.dropout(attention), V)
+        
+        # x = [bs ,n_attn_heads, query_len, attn_head_size]
+        x = x.permute(0, 2, 1, 3).contiguous()
+        
+        # x = [bs, query_len, num_attn_heads, attn_head_size]
+        x = x.view(batch_size, -1, self.hidden_dim)
+        
+        # x = [bs, query_len, hidden_dim]
+        
+        x = self.fc_o(x)
+        
+        return x , attention
+       
+class PositionwiseFeedforward(nn.Module):
+    
+    def __init__(self,
+                hidden_dim,
+                ff_dim,
+                dropout,
+                activation = 'relu'
+                ):
+        
+        super(PositionwiseFeedforward, self).__init__()
+        
+        self.fc_1 = nn.Linear(hidden_dim, ff_dim)
+        self.fc_2 = nn.Linear(ff_dim, hidden_dim)
+        self.activation = activation
+        
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x):
+        
+        # x = [bs, seq_len, hidden_dim]
+        if self.activation == "relu":
+            x = self.dropout(torch.relu(self.fc_1(x)))
+        elif self.activation == "gelu":
+            x = self.dropout(torch.gelu(self.fc_1(x)))
+        else:
+            ValueError(f"Invalid activation. Expects relu/gelu but received {self.activation}")
+        
+        # x = [bs, seq_len, ff_dim]
+        
+        x = self.fc_2(x)
+        
+        # x = [bs, seq_len, hidden_dim]
+        
+        return x
+        
+        
+# Encoder Layer
+# The Encoder layer implements the multi-head attention layer that performs the self-attention(MHSA) over the input sequences
+class EncoderLayer(nn.Module):
+    """
+    Sequence-to-Sequence Encoder Layer
+    """
+    def __init__(self,
+                 hidden_dim,
+                 num_attn_heads,
+                 ff_dim,
+                 dropout,
+#                  pos_embedder_type,
+                 activation,
+                 device,
+                 window_size = 0,
+                 use_local_self_attention = None
+                ):
+        super(EncoderLayer, self).__init__()
+        
+        if window_size % 2 != 0:
+            raise ValueError('Window size must be an even number so it can be split evenly across previous and' 'following tokens.')
+            
+        self.self_attention = LocalSelfAttention(hidden_dim, num_attn_heads, window_size,dropout,auto_pad =False) if use_local_self_attention else MHSA(hidden_dim, num_attn_heads, dropout, device)
+        
+        self.attn_ln = nn.LayerNorm(hidden_dim)
+        self.ff_ln   = nn.LayerNorm(hidden_dim)
+        self.positionwise_ff = PositionwiseFeedforward(hidden_dim, ff_dim, dropout, activation)
+        
+        self.dropout = dropout
+        self.use_local_self_attention = use_local_self_attention
+#         self.pos_embedder_type = pos_embedder_type
+        
+        
+    def forward(self, src, src_mask):
+
+        # src = [bs, src_len, hidden_dim]
+        # src_mask = [ bs, 1, 1, src_len]
+        
+        if not self.use_local_self_attention:
+            _src, _ = self.self_attention(src, src, src, src_mask)
+        else:
+            _src =  self.self_attention(src, src_mask)
+
+        # dropout, residual connection and layer norm
+        src = self.self_attention_ln(src + self.dropout(_src))
+
+        # positionwise feedforward
+        _src = self.positionwise_ff(src)
+        # dropout , residual and layernorm
+        src = self.ff_ln(src + self.dropout(_src))
+
+        # src = [bs, sr_len, hidden_dim]
+
+        return src
+
+
+## Encoder
+class Encoder(nn.Module):
+    
+    """
+    Sequence-to-Sequence Encoder
+    """
+    
+    def __init__(self,
+                input_dim,
+                hidden_dim,
+                num_layers,
+                num_attn_heads,
+                ff_dim,
+                dropout,
+                device,
+                max_length,
+                use_local_self_attention = None,
+                embedder_slice_count : int = 0,
+                embedder_bucket_count : int = 0,
+                window_size : int = 0,
+                token_embedder_type  : str = "hashing",
+                pos_embedder_type : str = "canine",
+                activation = "relu"
+                ):
+        
+        super(Encoder, self).__init__()
+
+        self.device = device
+
+        if activation not in ['relu', 'gelu']: RuntimeError(f"Invalid activation. Expects relu/gelu but got {activation}")
+        else: self.activation = activation
+
+        self.token_embedder_type = token_embedder_type
+        self.pos_embedder_type = pos_embedder_type
+
+        if pos_embedder_type == "normal":
+            self.scale = torch.sqrt(torch.FloatTensor([hidden_dim])).to(device)
+        
+        if token_embedder_type == "hashing":
+            self.token_embedder = MultiHashingEmbedder(hidden_dim, slice_count= embedder_slice_count, bucket_count =  embedder_bucket_count)
+        elif token_embedder_type == "normal":
+            self.token_embedder = nn.Embedding(input_dim, hidden_dim)
+        else:
+            RuntimeError(f"Invalid token embedder selected. Expected hashing/None")
+
+        if pos_embedder_type == "canine":
+            self.position_embedder = PositionEmbedding(max_length, hidden_dim)
+        elif pos_embedder_type == "attn_paper":
+            self.position_embedder = PositionalEncoding(hidden_dim, dropout, max_length)
+        else:
+            RuntimeError(f"Invalid position embedder selected. Expected Canine/None")
+
+        if not use_local_self_attention:
+            self.layers = nn.ModuleList([EncoderLayer(hidden_dim,
+                                                     num_attn_heads,
+                                                     ff_dim,
+                                                     dropout,
+#                                                      pos_embedder_type,
+                                                     activation,
+                                                     device)
+                                        for _ in range(num_layers)])
+        else:
+            self.layers = nn.ModuleList([EncoderLayer(hidden_dim,
+                                                     num_attn_heads,
+                                                     ff_dim,
+                                                     dropout,
+                                                     window_size,
+#                                                      pos_embedder_type,
+                                                     activation,
+                                                     device,
+                                                     use_local_self_attention)
+                                        for _ in range(num_layers)])
+
+        self.dropout = nn.Dropout(dropout)
+            
+        
+    def forward(self, src, src_mask):
+
+        #  src = [bs, src_len]
+        #  src_mask = [bs, 1, 1, src_len]
+
+        batch_size = src.shape[0]
+        src_len    = src.shape[1]
+
+        if self.pos_embedder_type == "attn_paper":
+            pos = torch.arange(0, src_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
+            # pos = [bs, src_len]
+            src = self.dropout(self.token_embedder(src)*self.scale) + self.position_embedder(pos)
+        else:
+            src = self.position_embedder(self.token_embedder(src))
+            src = self.dropout(src)
+
+        # src = [bs, src_len, hidden_dim]
+        for L in self.layers:
+            src = L(src, src_mask)
+
+        # src = [bs, src_len, hidden_dim]
+
+        return src
+
+        
+#Decoder Layer
+
+class DecoderLayer(nn.Module):
+    
+    """
+    Decoder Layer
+    """
+    
+    def __init__(self,
+                 hidden_dim,
+                 num_attn_heads,
+                 ff_dim,
+                 dropout,
+#                  pos_embedder_type,
+                 activation,
+                 device,
+                 window_size = 0,
+                 use_local_self_attention = None
+                ):
+        super(DecoderLayer, self).__init__()
+
+#         if window_size % 2 != 0:
+#             raise ValueError('Window size must be an even number so it can be split evenly across previous and' 'following tokens.')
+            
+        # encoder_attention
+        self.encoder_self_attention = LocalSelfAttention(hidden_dim, num_attn_heads, window_size, dropout,auto_pad =False) if use_local_self_attention else MHSA(hidden_dim, num_attn_heads, dropout, device)
+        
+        self.decoder_self_attention = MHSA(hidden_dim, num_attn_heads, dropout, device)
+        
+        self.attn_ln = nn.LayerNorm(hidden_dim)
+        self.enc_attn_ln =  nn.LayerNorm(hidden_dim)
+        self.positionwise_ff = PositionwiseFeedforward(hidden_dim, ff_dim, dropout, activation)
+
+        self.hidden_dim = hidden_dim
+        self.num_attn_heads = num_attn_heads
+        self.ff_dim = ff_dim
+        self.dropout = nn.Dropout(dropout)
+#         self.pos_embedder_type = pos_embedder_type
+        self.activation = activation
+        self.device = device
+        self.window_size = window_size
+        self.use_local_self_attention = use_local_self_attention
+        
+                
+    def forward(self, tgt, enc_src, tgt_mask, src_mask):
+        
+        _tgt, _ = self.decoder_self_attention(tgt, tgt_mask)
+        
+        tgt  = self.attn_ln(_tgt + self.dropout(_tgt))
+        
+        _tgt, attention = self.encoder_self_attention(tgt, enc_src, src_mask, tgt_mask)
+        
+        tgt = self.enc_attn_ln(_tgt + self.dropout(_tgt))
+        
+        _tgt = self.positionwise_ff(tgt)
+        
+        tgt = tgt + self.attn_ln(tgt + self.dropout(_tgt))
+        
+        
+        return tgt, attention
+
+    
+
+# Decoder
+class Decoder(nn.Module):
+    """
+    Sequence-to-Sequence Decoder
+    """
+    
+    def __init__(self,
+                output_dim,
+                hidden_dim,
+                num_layers,
+                num_attn_heads,
+                ff_dim,
+                dropout,
+                device,
+                max_length,
+                embedder_slice_count : int = 0,
+                embedder_bucket_count : int = 0,
+                token_embedder_type  : str = "hashing",
+                pos_embedder_type : str = "canine",
+                use_local_self_attention = False,
+                activation = "relu"
+                ):
+        super(Decoder, self).__init__()
+        
+        self.device = device
+        
+        if activation not in ['relu', 'gelu']: RuntimeError(f"Invalid activation received. expects relu/gelu but got {activation}")
+        else: self.activation = activation
+            
+        self.token_embedder_type = token_embedder_type
+        self.pos_embedder_type   = pos_embedder_type
+        
+        if token_embedder_type == "hashing":
+            self.token_embedder = MultiHashingEmbedder(hidden_dim,\
+                                                            slice_count= embedder_slice_count, bucket_count =  embedder_bucket_count)
+        elif token_embedder_type == "normal":
+            self.token_embedder = nn.Embedding(output_dim, hidden_dim)
+        else:
+            RuntimeError(f"Invalid token embedder selected but expects Hashing/None")
+            
+        if pos_embedder_type == "canine":
+             self.position_embedder = PositionEmbedding(max_length, hidden_dim)
+        elif pos_embedder_type == "attn_paper":
+            self.position_embedder = PositionalEncoding(hidden_dim, dropout, max_length)
+        else:
+            RuntimeError(f"Invalid position embedder selected but expects Canine/None")
+        
+        if not use_local_self_attention:
+            self.layers = nn.ModuleList([DecoderLayer(hidden_dim,
+                                                     num_attn_heads,
+                                                     ff_dim,
+                                                     dropout,
+#                                                      pos_embedder_type,
+                                                     activation,
+                                                     device)
+                                        for _ in range(num_layers)])
+        else:
+            self.layers = nn.ModuleList([DecoderLayer(hidden_dim,
+                                                     num_attn_heads,
+                                                     ff_dim,
+                                                     dropout,
+                                                     window_size,
+#                                                      pos_embedder_type,
+                                                     activation,
+                                                     device,
+                                                     use_local_self_attention)
+                                        for _ in range(num_layers)])
+        
+        self.fc_out = nn.Linear(hidden_dim, output_dim)
+        self.dropout = nn.Dropout(dropout)
+        
+        if self.pos_embedder_type == "attn_paper":
+            self.scale = torch.sqrt(torch.FloatTensor([hidden_dim])).to(device)        
+        
+
+    def forward(self, tgt, enc_src, tgt_mask, src_mask):
+
+        # tgt = [bs, tgt_len]
+        # enc_src = [bs, src_len, hidden_size]
+        # tgt_mask = [bs, 1, tgt_len, tgt_len]
+        # src_mask = [bs, 1, 1, src_len]
+
+        batch_size = tgt.shape[0]
+        tgt_len    = tgt.shape[1]
+
+        if self.pos_embedder_type == "attn_paper":
+            pos  = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size, 1).to(self.device)
+
+        # pos = [bs, tgt_len]
+
+        if self.pos_embedder_type == "attn_paper":
+            pos = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
+            # pos = [bs, tgt_len]
+            tgt = self.dropout(self.token_embedder(tgt)*self.scale) + self.position_embedder(pos)
+        else:
+            tgt = self.position_embedder(self.token_embedder(tgt))
+            tgt = self.dropout(tgt) 
+
+        # tgt = [ bs, tgt_len, hidden_dim ]
+
+        for L in self.layers:
+            tgt, attention = L(tgt, enc_src, tgt_mask, src_mask)
+
+        # tgt = [bs, tgt_len, hidden_dim]
+        # attention = [bs, num_attn_heads, tgt_len, src_len]
+
+        x = F.adaptive_avg_pool2d(attention, (1, 1))
+
+        return  tgt, x
+        
 
 class UniversalNumericalTransformer(nn.Module):
     """Universal Numerical Transformer Model
     A transformer model that learn to represent universal numerical text sequences multilingually using local transformer encoder 
-    and multihashing embedding utilies from CANINE paper
+    and multihashing embedding utilities from CANINE paper
     
     Args:
         intoken, outtoken (int): Number of tokens in both input and output text
@@ -88,6 +529,7 @@ class UniversalNumericalTransformer(nn.Module):
                       }
         tok_embeddings = {'hashing' : MultiHashingEmbedder,
                           'normal'  : nn.Embedding}
+        
         pos_embeddings = {'canine' : PositionEmbedding,
                           'attn_paper' : PositionalEncoding
                          }
@@ -97,24 +539,24 @@ class UniversalNumericalTransformer(nn.Module):
         else:
             self.activation_fn = activations[activation]()
             
-        if token_embedding_type not in tok_embeddings:
-            RuntimeError(f"token embedding type must be in {tok_embeddings.keys()} but is {token_embedding_type}")
             
-        elif "hashing" in token_embedding_type:
+        if token_embedding_type == "hashing":
             self.token_embedder = tok_embeddings[token_embedding_type](hidden_size, slice_count = embedder_slice_count, 
                                                                        bucket_count = embedder_bucket_count)
-        else:
+        elif token_embedding_type == "normal":
             self.encoder_token_embedder = tok_embeddings[token_embedding_type](self.intoken, hidden_size)
             self.decoder_token_embedder = tok_embeddings[token_embedding_type](self.outtoken, hidden_size)
-            
-        if position_embedding_type not in pos_embeddings:
-            RuntimeError(f"position embedding type must be in {pos_embeddings.keys()} but is {position_embedding_type}")
-            
-        elif "canine" in position_embedding_type:
-            self.position_embedder = pos_embeddings[position_embedding_type](max_length, hidden_size)
         else:
+            RuntimeError(f"token embedding type must be in {tok_embeddings.keys()} but is {token_embedding_type}")
+                     
+        if position_embedding_type == "canine":
+            self.position_embedder = pos_embeddings[position_embedding_type](max_length, hidden_size)
+            
+        elif position_embedding_type == "attn_paper" :
             self.position_embedder = pos_embeddings[position_embedding_type](hidden_size, dropout)
-                
+        else:
+            RuntimeError(f"position embedding type must be in {pos_embeddings.keys()} but is {position_embedding_type}")
+                   
         self.dropout = nn.Dropout(p = dropout)
         
         self.embedder_ln = nn.LayerNorm(hidden_size)
@@ -123,65 +565,108 @@ class UniversalNumericalTransformer(nn.Module):
         # note the CANINE paper says "local transformer", but it means "local transformer encoder" just like BERT
         
         if self.use_local_transformer:
+            
             self.encoder = LocalTransformerEncoderLayer(hidden_size, attention_heads, window_size = local_attention_window, dropout=dropout,
                                                                   activation= activation,
                                                                   dim_feedforward=transformer_ff_size)
-        else:
-            self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(hidden_size,
-                                                                             attention_heads,
-                                                                             dim_feedforward=transformer_ff_size,
-                                                                             dropout=dropout,
-                                                                             activation=activation),
-                                                                num_layers= 1)
 
-        # "Downsample (Strided Convolution) "
-        self.downsample_conv = nn.Conv1d(hidden_size, hidden_size, kernel_size=downsampling_rate,
+
+            #             self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(hidden_size,
+            #                                                                              attention_heads,
+            #                                                                              dim_feedforward=transformer_ff_size,
+            #                                                                              dropout=dropout,
+            #                                                                              activation=activation),
+            #                                                                 num_layers= 1)
+
+            # "Downsample (Strided Convolution) "
+            self.downsample_conv = nn.Conv1d(hidden_size, hidden_size, kernel_size=downsampling_rate,
                                                stride=downsampling_rate)
 
-        self.downsample_attention_pool = torch.nn.MaxPool1d(kernel_size=downsampling_rate, stride=downsampling_rate)
-        self.downsample_ln = torch.nn.LayerNorm(hidden_size)
-        self.cls_linear = torch.nn.Linear(hidden_size, hidden_size)
-        self.fc = nn.Linear(hidden_size , outtoken)
-        
-        # "Deep Transformer Stack"
-        if deep_transformer_stack is not None:
-            if deep_transformer_stack_layers is not None:
-                raise RuntimeError('deep_transformer_stack_layers and deep_transformer_stack both provided - please '
-                                   'provide only one.')
-            # TODO: perform some kind of basic verification that this is actually a torch module that can be used
-            # in place of the default deep transformer stack
-            self.deep_transformer = deep_transformer_stack
-        else:
-            layers = deep_transformer_stack_layers if deep_transformer_stack_layers is not None else 2
+            self.downsample_attention_pool = torch.nn.MaxPool1d(kernel_size=downsampling_rate, stride=downsampling_rate)
+            self.downsample_ln = torch.nn.LayerNorm(hidden_size)
+            self.cls_linear = torch.nn.Linear(hidden_size, hidden_size)
+
+            # "Deep Transformer Stack"
+            if deep_transformer_stack is not None:
+                if deep_transformer_stack_layers is not None:
+                    raise RuntimeError('deep_transformer_stack_layers and deep_transformer_stack both provided - please '
+                                       'provide only one.')
+                    # TODO: perform some kind of basic verification that this is actually a torch module that can be used
+                    # in place of the default deep transformer stack
+                self.deep_transformer = deep_transformer_stack
+                
+            else:
+                layers = deep_transformer_stack_layers if deep_transformer_stack_layers is not None else 2
 
             self.deep_transformer = nn.TransformerEncoder(nn.TransformerEncoderLayer(hidden_size,
-                                                                                                 attention_heads,
-                                                                                                 dim_feedforward=transformer_ff_size,
-                                                                                                 dropout=dropout,
-                                                                                                 activation=activation),
-                                                                num_layers=layers)
+                                                                                 attention_heads,
+                                                                                 dim_feedforward=transformer_ff_size,
+                                                                                 dropout=dropout,
+                                                                                 activation=activation),
+                                                num_layers=layers)
 
             self.deep_transformer_requires_transpose = True
-            
-        # "Conv + Single Transformer"
-        self.upsample_conv = nn.Conv1d(hidden_size * 2, hidden_size, kernel_size=upsampling_kernel_size, stride=1)
-        self.upsample_ln = nn.LayerNorm(hidden_size)
-        self.final_transformer =  nn.TransformerEncoder(nn.TransformerEncoderLayer(hidden_size, attention_heads,
+
+            # "Conv + Single Transformer"
+            self.upsample_conv = nn.Conv1d(hidden_size * 2, hidden_size, kernel_size=upsampling_kernel_size, stride=1)
+            self.upsample_ln = nn.LayerNorm(hidden_size)
+            self.final_transformer =  nn.TransformerEncoder(nn.TransformerEncoderLayer(hidden_size, attention_heads,
                                                                                      dim_feedforward=transformer_ff_size,
                                                                                      dropout=dropout,
                                                                                      activation=activation),
                                                     1)
-        decoder_layers = nn.TransformerDecoderLayer(hidden_size, attention_heads,
-                                                     dim_feedforward=transformer_ff_size,
-                                                     dropout=dropout,
-                                                     activation=activation)
         
-        self.decoder = nn.TransformerDecoder(decoder_layers, 1)
+            decoder_layers = nn.TransformerDecoderLayer(hidden_size, attention_heads,
+                                                         dim_feedforward=transformer_ff_size,
+                                                         dropout=dropout,
+                                                         activation=activation)
+
+            self.decoder = nn.TransformerDecoder(decoder_layers, 1)
+            
+        else:
+            self.encoder = Encoder(
+                        input_dim = intoken,
+                        hidden_dim = hidden_size,
+                        num_layers = 1,
+                        num_attn_heads = attention_heads,
+                        ff_dim = transformer_ff_size,
+                        dropout = dropout,
+                        device =device,
+                        max_length = max_length,
+                        embedder_slice_count = embedder_slice_count,
+                        embedder_bucket_count  = embedder_bucket_count,
+                        token_embedder_type  = token_embedding_type,
+                        pos_embedder_type = position_embedding_type,
+                        use_local_self_attention = None,
+                        activation = activation
+                        )
+
+            self.decoder = Decoder(
+                        output_dim = outtoken,
+                        hidden_dim = hidden_size,
+                        num_layers = 1,
+                        num_attn_heads = attention_heads,
+                        ff_dim = transformer_ff_size,
+                        dropout = dropout,
+                        device =device,
+                        max_length = max_length,
+                        embedder_slice_count = embedder_slice_count,
+                        embedder_bucket_count  = embedder_bucket_count,
+                        token_embedder_type  = token_embedding_type,
+                        pos_embedder_type = position_embedding_type,
+                        use_local_self_attention = None,
+                        activation = activation
+                        )
+
         
         # CLS Token
         self.cls_linear_final = nn.Linear(hidden_size, hidden_size)
         self.cls_activation = nn.Tanh()
 
+        # Classifier Head
+        self.fc = nn.Linear(hidden_size , outtoken)
+        
+        
     # "Upsampling"
     def _repeat_molecules(self, molecules: torch.Tensor, char_seq_length: int):
 
@@ -215,6 +700,7 @@ class UniversalNumericalTransformer(nn.Module):
                 tgt_input_ids : torch.Tensor,
                 tgt_attention_mask : torch.Tensor
                ):
+        
         trg_mask = self._generate_square_subsequent_mask(len(tgt_input_ids)).to(tgt_input_ids.device)
         
         char_embeddings = self.position_embedder(self.token_embedder(input_ids)) if self.token_embedding_type =='hashing' else self.position_embedder(self.encoder_token_embedder(input_ids))
@@ -271,19 +757,24 @@ class UniversalNumericalTransformer(nn.Module):
             final_cls_embeddings = torch.cat((final_cls, final_embeddings), dim=1)  # replace CLS embedding
 
         else:
-            final_cls_embeddings = self.encoder(char_embeddings, None, attention_mask)
+            
+            final_cls_embeddings = self.encoder(char_embeddings, attention_mask)
 
-        # Init the decoder with the final encoder embeddings
-        decoder_states = self.decoder(tgt = tgt_char_embeddings, 
-                                   memory = final_cls_embeddings, tgt_mask = trg_mask, memory_mask = None, 
-                                  tgt_key_padding_mask = tgt_attention_mask, memory_key_padding_mask = attention_mask
-                                   )
+            # Initialize the decoder with the final encoder embeddings
+            #         decoder_final_states, attn_probas = self.decoder(tgt = tgt_char_embeddings, 
+            #                                    memory = final_cls_embeddings, tgt_mask = trg_mask, memory_mask = None,
+            #                                   tgt_key_padding_mask = tgt_attention_mask, memory_key_padding_mask = attention_mask
+            #                                    )
 
+        decoder_final_states, attn_probas = self.decoder(tgt = tgt_char_embeddings, 
+                           src = final_cls_embeddings, tgt_mask = trg_mask, src_mask = attention_mask
+                           )
                         
-        output = self.fc(decoder_states)
+        output = self.fc(decoder_final_states)
             
         return {
             'embeddings': final_cls_embeddings,
+            'attn_probas': attn_probas,
             'logits': output
         }
     

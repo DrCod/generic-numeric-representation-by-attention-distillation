@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import math
 import pdb
+
+
 class PositionEmbedding(nn.Module):
     """
     [batch_size, sequence_length, embedding_dimension]
@@ -11,7 +13,7 @@ class PositionEmbedding(nn.Module):
         super(PositionEmbedding, self).__init__()
         self.embedding = nn.Embedding(max_sequence_length, emb_dim, padding_idx = None)
         
-    def forward(self, input_embeddings : torch.tensor):
+    def forward(self, input_embeddings : torch.Tensor):
         
         positions = torch.arange(input_embeddings.shape[1], device = input_embeddings.device)
         return input_embeddings + self.embedding(positions)
@@ -25,7 +27,7 @@ class PositionalEncoding(nn.Module):
         self.scale = nn.Parameter(torch.ones(1))
 
         pe = torch.zeros(max_length, d_model)
-        position = torch.arange(0, max_length, dtype=torch.float).unsqueeze(1)
+        position = torch.arange(0, max_length, dtype=torch.long).unsqueeze(1)
         div_term = torch.exp(torch.arange(
             0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
