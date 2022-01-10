@@ -216,15 +216,15 @@ class TransliterationModel():
             correct_indices = []
             
             src, trg, src_text ,tgt_text = data
-            
-            src = src.T.to(self.device).long()
-            trg = trg.T.to(self.device).long()
+                        
+            src = src.T.to(self.device)
+            trg = trg.T.to(self.device)
             
             # make source pad mask
             src_mask = (src == self.pad_token).transpose(0,1)
             # make target pad mask
             tgt_mask = (trg[:-1, :] == self.pad_token).transpose(0,1)
-            
+                        
             model_out = self.model(src, src_mask , trg[:-1, :], tgt_mask)
             
             output = model_out['logits']
