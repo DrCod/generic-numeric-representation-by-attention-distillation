@@ -37,7 +37,6 @@ class MHSA(nn.Module):
         self.Q_fc = nn.Linear(hidden_dim, hidden_dim)
         self.K_fc = nn.Linear(hidden_dim, hidden_dim)
         self.V_fc = nn.Linear(hidden_dim, hidden_dim)
-        
         self.fc_o = nn.Linear(hidden_dim, hidden_dim)
         
         self.dropout = nn.Dropout(dropout)
@@ -322,7 +321,6 @@ class DecoderLayer(nn.Module):
         self.attn_ln = nn.LayerNorm(hidden_dim)
         self.enc_attn_ln =  nn.LayerNorm(hidden_dim)
         self.positionwise_ff = PositionwiseFeedforward(hidden_dim, ff_dim, dropout, activation)
-
         self.hidden_dim = hidden_dim
         self.num_attn_heads = num_attn_heads
         self.ff_dim = ff_dim
@@ -340,7 +338,7 @@ class DecoderLayer(nn.Module):
         
         tgt  = self.attn_ln(_tgt + self.dropout(_tgt))
         
-        _tgt, attention = self.encoder_self_attention(tgt, enc_src, src_mask, tgt_mask)
+        _tgt, attention = self.encoder_self_attention(tgt, enc_src, enc_src, tgt_mask)
         
         tgt = self.enc_attn_ln(_tgt + self.dropout(_tgt))
         

@@ -416,16 +416,16 @@ class TransliterationModel():
             with torch.no_grad():
 
                 src = pos_enc(tok_enc(input_sentence))
-                memory = encoder(src, None ,src_pad_mask)
+                memory = encoder(src ,src_pad_mask)
 
                 while not all(end_word): #Keep looping till all sentences hit <eos>
                     
                     output_sentence = torch.Tensor(preds).long().to(self.device)
 
                     trg = pos_enc(tok_enc(output_sentence))
-                    output = decoder(tgt = trg, memory = memory, memory_key_padding_mask = src_pad_mask)
+                    logits, _ = decoder(tgt = trg, enc_src = memory, tgt_mask = None, src_mask = src_pad_mask)
                     
-                    output = fc(output)
+                    output = fc(logits)
 
                     output = output.argmax(-1)[-1].cpu().detach().numpy()
                     preds.append(output.tolist())
@@ -588,7 +588,7 @@ class TransliterationModel():
         text = re.sub(r'\s+', ' ', text).strip()
         
         text = re.sub(r'([h][h][h][h])\1+', r'\1', text)
-        text = re.sub(r'([a-g-i-z])\1+', r'\1', text)  #Remove repeating characters
+        text = re.sub(r'([a-g-i-z])\1+', r'\1', text)
         text = re.sub(r' [0-9]+ ', " ", text)
         text = re.sub(r'^[0-9]+ ', "", text)
 
