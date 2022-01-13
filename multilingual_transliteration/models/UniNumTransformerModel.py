@@ -207,8 +207,8 @@ class Encoder(nn.Module):
                 embedder_slice_count : int = 0,
                 embedder_bucket_count : int = 0,
                 window_size : int = 0,
-                token_embedder  : nn.Module = None,
-                pos_embedder : nn.Module = None,
+#                 token_embedder  : nn.Module = None,
+#                 pos_embedder : nn.Module = None,
                 activation = "relu"
                 ):
         
@@ -219,8 +219,8 @@ class Encoder(nn.Module):
         if activation not in ['relu', 'gelu']: RuntimeError(f"Invalid activation. Expects relu/gelu but got {activation}")
         else: self.activation = activation
 
-        self.token_embedder = token_embedder
-        self.pos_embedder = pos_embedder
+#         self.token_embedder = token_embedder
+#         self.pos_embedder = pos_embedder
 
         #         if pos_embedder_type == "normal":
         self.scale = torch.sqrt(torch.FloatTensor([hidden_dim])).to(device)
@@ -368,8 +368,8 @@ class Decoder(nn.Module):
                 max_length,
                 embedder_slice_count : int = 0,
                 embedder_bucket_count : int = 0,
-                token_embedder  : nn.Module = None,
-                pos_embedder : nn.Module = None,
+#                 token_embedder  : nn.Module = None,
+#                 pos_embedder : nn.Module = None,
                 use_local_self_attention = False,
                 activation = "relu"
                 ):
@@ -380,8 +380,8 @@ class Decoder(nn.Module):
         if activation not in ['relu', 'gelu']: RuntimeError(f"Invalid activation received. expects relu/gelu but got {activation}")
         else: self.activation = activation
             
-        self.token_embedder = token_embedder
-        self.pos_embedder   = pos_embedder
+#         self.token_embedder = token_embedder
+#         self.pos_embedder   = pos_embedder
         
         #         if token_embedder_type == "hashing":
         #             self.token_embedder = MultiHashingEmbedder(hidden_dim,\
@@ -531,7 +531,8 @@ class UniversalNumericalTransformer(nn.Module):
                        'relu' : nn.ReLU
                       }
         tok_embeddings = {'hashing' : MultiHashingEmbedder,
-                          'normal'  : nn.Embedding}
+                          'normal'  : nn.Embedding
+                         }
         
         pos_embeddings = {'canine' : PositionEmbedding,
                           'attn_paper' : PositionalEncoding
@@ -641,8 +642,8 @@ class UniversalNumericalTransformer(nn.Module):
                         max_length = max_length,
                         embedder_slice_count = embedder_slice_count,
                         embedder_bucket_count  = embedder_bucket_count,
-                        token_embedder  = self.encoder_token_embedder,
-                        pos_embedder = self.position_embedder,
+#                         token_embedder  = self.encoder_token_embedder,
+#                         pos_embedder = self.position_embedder,
                         use_local_self_attention = None,
                         activation = activation
                         )
@@ -658,8 +659,8 @@ class UniversalNumericalTransformer(nn.Module):
                         max_length = max_length,
                         embedder_slice_count = embedder_slice_count,
                         embedder_bucket_count  = embedder_bucket_count,
-                        token_embedder  = self.decoder_token_embedder,
-                        pos_embedder = self.position_embedder,
+#                         token_embedder  = self.decoder_token_embedder,
+#                         pos_embedder = self.position_embedder,
                         use_local_self_attention = None,
                         activation = activation
                         )
@@ -686,8 +687,11 @@ class UniversalNumericalTransformer(nn.Module):
         return torch.cat((repeated_molecules, last_molecule_repeated), dim=1)
     
     
-    def get_token_embedder(self):
+    def get_enc_token_embedder(self):
         return self.encoder_token_embedder
+    
+    def get_dec_token_embedder(self):
+        return self.decoder_token_embedder
     
     def get_position_encoder(self):
         return self.position_embedder

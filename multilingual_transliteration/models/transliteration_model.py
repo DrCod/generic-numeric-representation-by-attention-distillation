@@ -301,8 +301,8 @@ class TransliterationModel():
             
             src, trg, src_text, tgt_text = data
             
-            src = src.T.to(self.device).long()
-            trg = trg.T.to(self.device).long()
+            src = src.T.to(self.device)
+            trg = trg.T.to(self.device)
             
             # make source pad mask
             src_mask = (src == self.pad_token).transpose(0,1)
@@ -387,7 +387,8 @@ class TransliterationModel():
         
         # initiliaze transformer model functional modules
         pos_enc = self.model.get_position_encoder()
-        tok_enc = self.model.get_token_embedder()
+        tok_enc = self.model.get_enc_token_embedder()
+        tok_dec = self.model.get_dec_token_embedder()
         encoder = self.model.get_transformer_encoder()
         decoder = self.model.get_transformer_decoder()
         fc      = self.model.get_fc()
@@ -422,7 +423,7 @@ class TransliterationModel():
                     
                     output_sentence = torch.Tensor(preds).long().to(self.device)
 
-                    trg = pos_enc(tok_enc(output_sentence))
+                    trg = pos_enc(tok_dec(output_sentence))
                     logits, _ = decoder(tgt = trg, enc_src = memory, tgt_mask = None, src_mask = src_pad_mask)
                     
                     output = fc(logits)
