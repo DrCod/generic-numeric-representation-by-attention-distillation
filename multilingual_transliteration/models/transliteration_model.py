@@ -104,7 +104,7 @@ class TransliterationModel():
         
         self.in_token_to_int = {token: (i+1) for i,token in enumerate(sorted(in_tokens))}
 
-        self.in_token_to_int[0] = "<pad>"
+        self.in_token_to_int["<pad>"] = self.pad_token
                 
         #Out put has three special tokens, <eos> <sos> and <pad>
         out_tokens = set(" ".join(self.train_df['tgt'].values.tolist())) | set(" ".join(self.train_df['tgt'].values.tolist()))
@@ -212,7 +212,7 @@ class TransliterationModel():
                 
         
         for i , (data) in enumerate(pbar, start = start_iter):
-            
+                        
             correct_indices = []
             
             src, trg, src_text ,tgt_text = data
@@ -329,7 +329,7 @@ class TransliterationModel():
                     correct_indices.append(idx)
 
             # gather samples corresponding to correct indices
-            correct_indices = torch.tensor(correct_indices, dtype = torch.long)
+            correct_indices = torch.Tensor(correct_indices, dtype = torch.long)
             
             # src = src.gather(correct_indices, 1, src)
             soft_attn_labels = trg.gather(correct_indices, 1, attention_probs)
@@ -349,30 +349,30 @@ class TransliterationModel():
     
         return total_loss / len(iterator), np.mean(cer_distances), good_samples, attn_labels
 
-    #Keep numbers block
-    def split(self, text):
-        """Split sentences based on punctuation and spaces
-           Store punctuation and known words (we don't need to predict words that exist in the dataset)
-           Returns:
-            Tuple: Splits of words to be passed through the model, and the removed words and their indexes
-        """
+#     #Keep numbers block
+#     def split(self, text):
+#         """Split sentences based on punctuation and spaces
+#            Store punctuation and known words (we don't need to predict words that exist in the dataset)
+#            Returns:
+#             Tuple: Splits of words to be passed through the model, and the removed words and their indexes
+#         """
 
-        splits = re.findall(r"[\w']+|[?!.,]", text)
+#         splits = re.findall(r"[\w']+|[?!.,]", text)
 
 
-        to_be_added = []
-        idx_to_be_added = []
+#         to_be_added = []
+#         idx_to_be_added = []
 
-        forbidden = ["?", "!", ".", ","]
+#         forbidden = ["?", "!", ".", ","]
 
-        for i, split in enumerate(splits):
-            if split in forbidden:
-                idx_to_be_added.append(i)
-                to_be_added.append(split)
+#         for i, split in enumerate(splits):
+#             if split in forbidden:
+#                 idx_to_be_added.append(i)
+#                 to_be_added.append(split)
 
-        splits = [i for i in splits if not i in forbidden]
+#         splits = [i for i in splits if not i in forbidden]
 
-        return splits, idx_to_be_added, to_be_added
+#         return splits, idx_to_be_added, to_be_added
 
     def transliterate_phrase(self, text):
         """Transliterate phrase into batches of word using greedy search
@@ -383,8 +383,8 @@ class TransliterationModel():
         """
     
         #Get splits
-        phrase, to_be_added, idx_to_be_added = self.split(text.lower())
-        
+#         phrase, to_be_added, idx_to_be_added = self.split(text.lower())
+                
         # initiliaze transformer model functional modules
         pos_enc = self.model.get_position_encoder()
         tok_enc = self.model.get_enc_token_embedder()
@@ -395,24 +395,22 @@ class TransliterationModel():
         
         result  = []
 
-        #Sometimes all the words in a sentence exist in the known dict
-        #So the returned phrase is empty, we check for that
-        if len(phrase) > 0: 
 
-            max_len_phrase = max([len(i) for i in phrase])
+        if len(text) > 0: 
 
-            #Pad and tokenize sentences
-            input_sentence = []
-            for word in phrase:
-                input_sentence.append([self.in_token_to_int[i] for i in word] + [self.out_token_to_int["<pad>"]]*(max_len_phrase-len(word)))
+#             max_len_phrase = max([len(i) for i in phrase])
+
+            input_sentence  = [self.in_token_to_int[i] for i in text]
+                
+            input_sentence = input_sentence +  (self.in_max - len(input_sentence)) * [self.in_token_to_int["<pad>"]]
 
             #Convert to Tensors
             input_sentence = torch.Tensor(input_sentence).long().T.to(self.device)
-            preds = [[self.out_token_to_int["<sos>"]] * len(phrase)] 
-
+            preds = [[self.out_token_to_int["<sos>"]] * len(text)] 
+                                                
             #A list of booleans to keep track of which sentences ended, and which sentences did not
-            end_word = len(phrase) * [False]
-            src_pad_mask = (input_sentence == self.out_token_to_int["<pad>"]).transpose(0,1)
+            end_word = len(text) * [False]
+            src_pad_mask = (input_sentence == self.pad_token).transpose(0,1)
 
             with torch.no_grad():
 
@@ -422,7 +420,7 @@ class TransliterationModel():
                 while not all(end_word): #Keep looping till all sentences hit <eos>
                     
                     output_sentence = torch.Tensor(preds).long().to(self.device)
-
+                    
                     trg = pos_enc(tok_dec(output_sentence))
                     logits, _ = decoder(tgt = trg, enc_src = memory, tgt_mask = None, src_mask = src_pad_mask)
                     
