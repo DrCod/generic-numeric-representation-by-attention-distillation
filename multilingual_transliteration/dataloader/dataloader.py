@@ -14,7 +14,7 @@ class TransliterationDataset(Dataset):
         self.target = target.values
         self.src_texts= src_texts.values
         self.tgt_texts = tgt_texts.values
-        self.src_lengths = [len(x) for x in self.src]
+        self.src_lengths =  [len(x) for x in self.src]
         self.tgt_lengths = [len(x) for x in self.target]
             
     def __len__(self):

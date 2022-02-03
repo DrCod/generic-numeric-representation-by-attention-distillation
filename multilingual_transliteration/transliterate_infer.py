@@ -70,7 +70,7 @@ def preprocess_text(text):
     return text
 
 
-def transliterate_phrase(args, pretrained_utils, device, src_text, tgt_text):
+def transliterate_phrase(args, pretrained_utils, device, split_src_text, tgt_text):
     """Transliterate phrase into batches of word using greedy search
        Args:
         text (str): Sentence, or a group of sentences separated by a period.
@@ -81,7 +81,7 @@ def transliterate_phrase(args, pretrained_utils, device, src_text, tgt_text):
     # unpack list of pretrained items
     model, in_token2int, out_int2token, out_token2int, token_embedder, position_embedder, transformer_encoder, transformer_decoder ,fc = pretrained_utils
     
-    split_src_text, idx_to_be_added, to_be_added = split(src_text)
+#     split_src_text, idx_to_be_added, to_be_added = split(src_text)
             
     pad_token = 0
     eos_token = 2
@@ -94,18 +94,18 @@ def transliterate_phrase(args, pretrained_utils, device, src_text, tgt_text):
         
     if len(split_src_text) > 0: 
         
-        max_len_in_phrase = max([len(i) for i in split_src_text])
+#         max_len_in_phrase = max([len(i) for i in split_src_text])
 
         #Pad and tokenize sentences
         #Idea? Pad with random text serving as auxilliary input
         input_sentence = []
         
         for word in split_src_text:
-            input_sentence.append([in_token2int[i] for i in word] + [out_token2int["<pad>"]]*(max_len_in_phrase-len(word)))
+            input_sentence.append([in_token2int[i] for i in word]) #+ [out_token2int["<pad>"]]*(max_len_in_phrase-len(word)))
         
         input_sentence = torch.Tensor(input_sentence).long().T.to(device)
         
-        preds = [[out_token2int["<sos>"]] * len(split_src_text)]
+        preds = [out_token2int["<sos>"]] * len(split_src_text)
         end_word = len(split_src_text) * [False]
         
         src_mask = (input_sentence == out_token2int["<pad>"]).transpose(0,1)

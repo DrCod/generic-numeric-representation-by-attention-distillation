@@ -23,7 +23,6 @@ class MHSA(nn.Module):
                 hidden_dim,
                 num_attn_heads,
                 dropout,
-#                 pos_embedder_type,
                 device):
         
         super(MHSA, self).__init__()
@@ -41,7 +40,6 @@ class MHSA(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
         
-#         if pos_embedder_type == "attn_paper":
         self.scale = torch.sqrt(torch.FloatTensor([self.attn_head_size])).to(device)
     
     def forward(self, query, key, value, mask = None):
@@ -71,11 +69,11 @@ class MHSA(nn.Module):
         scores = torch.matmul(Q, K.permute(0,1,3,2)) / self.scale
         
         # scores = [bs, num_attn_heads, query_len, key_len ]
-        
-#         if mask is not None:
-                        
+
+#         if mask:
+
 #             scores =  scores.masked_fill(mask == 0, -1e10)
-            
+
         attention = torch.softmax(scores, dim = -1)
         
         # attention = [bs, num_attn_heads, query_len, key_len]
@@ -207,8 +205,6 @@ class Encoder(nn.Module):
                 embedder_slice_count : int = 0,
                 embedder_bucket_count : int = 0,
                 window_size : int = 0,
-#                 token_embedder  : nn.Module = None,
-#                 pos_embedder : nn.Module = None,
                 activation = "relu"
                 ):
         
@@ -302,7 +298,6 @@ class DecoderLayer(nn.Module):
                  num_attn_heads,
                  ff_dim,
                  dropout,
-#                  pos_embedder_type,
                  activation,
                  device,
                  window_size = 0,
@@ -319,28 +314,31 @@ class DecoderLayer(nn.Module):
         self.decoder_self_attention = MHSA(hidden_dim, num_attn_heads, dropout, device)
         
         self.attn_ln = nn.LayerNorm(hidden_dim)
-        self.enc_attn_ln =  nn.LayerNorm(hidden_dim)
+        self.dec_attn_ln =  nn.LayerNorm(hidden_dim)
         self.positionwise_ff = PositionwiseFeedforward(hidden_dim, ff_dim, dropout, activation)
         self.hidden_dim = hidden_dim
         self.num_attn_heads = num_attn_heads
         self.ff_dim = ff_dim
         self.dropout = nn.Dropout(dropout)
-#         self.pos_embedder_type = pos_embedder_type
         self.activation = activation
         self.device = device
         self.window_size = window_size
         self.use_local_self_attention = use_local_self_attention
         
                 
-    def forward(self, tgt, enc_src, tgt_mask, src_mask):
+    def forward(self, tgt, enc_src=None, tgt_mask =None, src_mask =None):
         
-        _tgt, _ = self.decoder_self_attention(tgt, tgt, tgt, tgt_mask)
+        if tgt_mask is not None:
+            _tgt, attention = self.decoder_self_attention(tgt, tgt, tgt, tgt_mask)
+        else:
+            _tgt, attention = self.decoder_self_attention(tgt, tgt, tgt)            
         
-        tgt  = self.attn_ln(_tgt + self.dropout(_tgt))
+        tgt  = self.attn_ln(tgt + self.dropout(_tgt))
         
-        _tgt, attention = self.encoder_self_attention(tgt, enc_src, enc_src, tgt_mask)
-        
-        tgt = self.enc_attn_ln(_tgt + self.dropout(_tgt))
+        if enc_src is not None:
+            _tgt, attention = self.decoder_self_attention(tgt, enc_src, enc_src, src_mask)
+
+        tgt = self.dec_attn_ln(_tgt + self.dropout(_tgt))
         
         _tgt = self.positionwise_ff(tgt)
         
@@ -350,7 +348,6 @@ class DecoderLayer(nn.Module):
         return tgt, attention
 
     
-
 # Decoder
 class Decoder(nn.Module):
     """
@@ -368,8 +365,6 @@ class Decoder(nn.Module):
                 max_length,
                 embedder_slice_count : int = 0,
                 embedder_bucket_count : int = 0,
-#                 token_embedder  : nn.Module = None,
-#                 pos_embedder : nn.Module = None,
                 use_local_self_attention = False,
                 activation = "relu"
                 ):
@@ -377,11 +372,13 @@ class Decoder(nn.Module):
         
         self.device = device
         
-        if activation not in ['relu', 'gelu']: RuntimeError(f"Invalid activation received. expects relu/gelu but got {activation}")
-        else: self.activation = activation
+        if activation not in ['relu', 'gelu']: 
+            RuntimeError(f"Invalid activation received. expects relu/gelu but got {activation}")
+        else: 
+            self.activation = activation
             
-#         self.token_embedder = token_embedder
-#         self.pos_embedder   = pos_embedder
+        #         self.token_embedder = token_embedder
+        #         self.pos_embedder   = pos_embedder
         
         #         if token_embedder_type == "hashing":
         #             self.token_embedder = MultiHashingEmbedder(hidden_dim,\
@@ -403,7 +400,6 @@ class Decoder(nn.Module):
                                                      num_attn_heads,
                                                      ff_dim,
                                                      dropout,
-#                                                      pos_embedder_type,
                                                      activation,
                                                      device)
                                         for _ in range(num_layers)])
@@ -413,7 +409,6 @@ class Decoder(nn.Module):
                                                      ff_dim,
                                                      dropout,
                                                      window_size,
-#                                                      pos_embedder_type,
                                                      activation,
                                                      device,
                                                      use_local_self_attention)
@@ -436,18 +431,18 @@ class Decoder(nn.Module):
         batch_size = tgt.shape[0]
         tgt_len    = tgt.shape[1]
 
-#         if self.pos_embedder_type == "attn_paper":
-#         pos  = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size, 1).to(self.device)
+        #         if self.pos_embedder_type == "attn_paper":
+        #         pos  = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size, 1).to(self.device)
 
-        # pos = [bs, tgt_len]
+                # pos = [bs, tgt_len]
 
-#         if self.pos_embedder_type == "attn_paper":
-#         pos = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
-        # pos = [bs, tgt_len]
-#         tgt = self.dropout(self.token_embedder(tgt)*self.scale) + self.position_embedder(pos)
-#         else:
-#             tgt = self.position_embedder(self.token_embedder(tgt))
-#             tgt = self.dropout(tgt) 
+        #         if self.pos_embedder_type == "attn_paper":
+        #         pos = torch.arange(0, tgt_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
+                # pos = [bs, tgt_len]
+        #         tgt = self.dropout(self.token_embedder(tgt)*self.scale) + self.position_embedder(pos)
+        #         else:
+        #             tgt = self.position_embedder(self.token_embedder(tgt))
+        #             tgt = self.dropout(tgt) 
 
         # tgt = [ bs, tgt_len, hidden_dim ]
 

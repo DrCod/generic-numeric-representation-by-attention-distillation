@@ -180,8 +180,7 @@ class TransliterationModel():
         tokenized = [self.out_token_to_int["<sos>"]] + [self.out_token_to_int[i] for i in phrase] + [self.out_token_to_int["<eos>"]]
         
         if pad:
-            padded = tokenized + (self.out_max - len(tokenized))* [self.out_token_to_int["<pad>"]]
-            
+            padded = tokenized + (self.out_max - len(tokenized))* [self.out_token_to_int["<pad>"]]      
         else:
             padded = tokenized
             
@@ -240,6 +239,7 @@ class TransliterationModel():
             
             total_loss += loss.item()
             
+            
             # transliterate source texts
             results = self.transliterate_list(src_text)
             
@@ -255,8 +255,7 @@ class TransliterationModel():
             correct_indices = np.array(correct_indices)
             correct_indices = torch.tensor(correct_indices, dtype = torch.long)
             
-            #             src = src.gather(correct_indices, 1, attention_probs)
-            soft_attn_labels = trg.gather(correct_indices, 1, attention_probs)
+            soft_attn_labels = attention_probs.detach().cpu().gather(0, index=correct_indices)
     
             attn_labels.append(soft_attn_labels)
                         
@@ -322,24 +321,25 @@ class TransliterationModel():
             # transliterate source texts
             results = self.transliterate_list(src_text)
             
-            # get correct samples
             for idx, (x_src, x_pred, x_tgt) in enumerate(list(zip(src_text, tgt_text, results))):
+                
                 if x_pred == x_tgt:
                     good_samples[x_src] = x_tgt
+                    # Generate attention labels for good samples
                     correct_indices.append(idx)
-
+                    
             # gather samples corresponding to correct indices
-            correct_indices = torch.Tensor(correct_indices, dtype = torch.long)
+            correct_indices = np.array(correct_indices)
+            correct_indices = torch.tensor(correct_indices, dtype = torch.long)
             
-            # src = src.gather(correct_indices, 1, src)
-            soft_attn_labels = trg.gather(correct_indices, 1, attention_probs)
+            soft_attn_labels = attention_probs.detach().cpu().gather(0, index=correct_indices)
+    
+            attn_labels.append(soft_attn_labels)
                         
             # make source pad mask
             # src_mask = (src == self.pad_token).transpose(0,1)
             # make target pad mask
             # tgt_mask = (trg[:-1, :] == self.pad_token).transpose(0,1)
-                        
-            attn_labels.append(soft_attn_labels)
                     
             val_cer = list(map(lambda x : calculate_cer(*x), list(zip(results, tgt_text))))
             cer_distances.append(np.mean(val_cer))
@@ -383,7 +383,7 @@ class TransliterationModel():
         """
     
         #Get splits
-#         phrase, to_be_added, idx_to_be_added = self.split(text.lower())
+        #         phrase, to_be_added, idx_to_be_added = self.split(text.lower())
                 
         # initiliaze transformer model functional modules
         pos_enc = self.model.get_position_encoder()
@@ -397,20 +397,20 @@ class TransliterationModel():
 
 
         if len(text) > 0: 
-
-#             max_len_phrase = max([len(i) for i in phrase])
+            
+#             max_len_phrase = max([len(i) for i in text])
 
             input_sentence  = [self.in_token_to_int[i] for i in text]
                 
-            input_sentence = input_sentence +  (self.in_max - len(input_sentence)) * [self.in_token_to_int["<pad>"]]
+#             input_sentence = input_sentence +  (self.out_max - len(input_sentence)) * [self.in_token_to_int["<pad>"]]
 
             #Convert to Tensors
             input_sentence = torch.Tensor(input_sentence).long().T.to(self.device)
-            preds = [[self.out_token_to_int["<sos>"]] * len(text)] 
-                                                
+            preds = [self.sos_token] * len(text)
+                        
             #A list of booleans to keep track of which sentences ended, and which sentences did not
             end_word = len(text) * [False]
-            src_pad_mask = (input_sentence == self.pad_token).transpose(0,1)
+            src_pad_mask = (input_sentence == self.pad_token)
 
             with torch.no_grad():
 
@@ -419,24 +419,27 @@ class TransliterationModel():
 
                 while not all(end_word): #Keep looping till all sentences hit <eos>
                     
+                    
+                    preds = np.array(preds)
                     output_sentence = torch.Tensor(preds).long().to(self.device)
                     
                     trg = pos_enc(tok_dec(output_sentence))
-                    logits, _ = decoder(tgt = trg, enc_src = memory, tgt_mask = None, src_mask = src_pad_mask)
+                    logits, _ = decoder(tgt = trg, enc_src = None, tgt_mask = None, src_mask = src_pad_mask)
                     
                     output = fc(logits)
-
+                    
                     output = output.argmax(-1)[-1].cpu().detach().numpy()
-                    preds.append(output.tolist())
+                    preds = np.vstack((preds, output))
+#                     preds.append(output.tolist())
 
                     end_word = (output == self.out_token_to_int["<sos>"]) | end_word  #Update end word states
                     
                     if len(preds) > 50: #If word surpasses 50 characters, break out
                         break
                     
-            preds = np.array(preds).T  #(words, words_len)
+            preds = preds.T  #(words, words_len)
 
-            for word in preds:  #De-tokenize predicted words
+            for word in preds.tolist():  #De-tokenize predicted words
                 tmp = []
                 for i in word[1:]:   
                     if self.out_int_to_token[i] == "<eos>":
