@@ -240,7 +240,6 @@ class Encoder(nn.Module):
                                                      num_attn_heads,
                                                      ff_dim,
                                                      dropout,
-#                                                      pos_embedder_type,
                                                      activation,
                                                      device)
                                         for _ in range(num_layers)])
@@ -250,7 +249,6 @@ class Encoder(nn.Module):
                                                      ff_dim,
                                                      dropout,
                                                      window_size,
-#                                                      pos_embedder_type,
                                                      activation,
                                                      device,
                                                      use_local_self_attention)
@@ -266,15 +264,6 @@ class Encoder(nn.Module):
 
         batch_size = src.shape[0]
         src_len    = src.shape[1]
-
-        #         if self.pos_embedder_type == "attn_paper":
-#         pos = torch.arange(0, src_len).long().unsqueeze(0).repeat(batch_size,1).to(self.device)
-        # pos = [bs, src_len]
-#         src = self.dropout(self.token_embedder(src)*self.scale) + self.position_embedder(pos)
-        
-        #         else:
-        #             src = self.position_embedder(self.token_embedder(src))
-        #             src = self.dropout(src)
 
         # src = [bs, src_len, hidden_dim]
         for L in self.layers:
@@ -343,7 +332,6 @@ class DecoderLayer(nn.Module):
         _tgt = self.positionwise_ff(tgt)
         
         tgt = tgt + self.attn_ln(tgt + self.dropout(_tgt))
-        
         
         return tgt, attention
 
@@ -771,7 +759,8 @@ class UniversalNumericalTransformer(nn.Module):
             #                                    )
 
         decoder_final_states, attn_probas = self.decoder(tgt = tgt_char_embeddings, 
-                           enc_src = final_cls_embeddings, tgt_mask = trg_mask, src_mask = attention_mask
+                           enc_src = None,
+                                                         tgt_mask = trg_mask, src_mask = attention_mask
                            )
                         
         output = self.fc(decoder_final_states)

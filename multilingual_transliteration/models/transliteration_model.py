@@ -144,8 +144,8 @@ class TransliterationModel():
         """
 
         x = row.copy()
-        x.src = self.tokenize_in(x.src)
-        x.tgt = self.tokenize_out(x.tgt)
+        x.src = self.tokenize_in(x.src, pad = True)
+        x.tgt = self.tokenize_out(x.tgt, pad = True)
         
         return x
     
@@ -218,6 +218,8 @@ class TransliterationModel():
                         
             src = src.T.to(self.device)
             trg = trg.T.to(self.device)
+            
+#             print(f'shapes {src.shape, trg.shape}')
             
             # make source pad mask
             src_mask = (src == self.pad_token).transpose(0,1)

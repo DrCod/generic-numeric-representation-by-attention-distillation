@@ -93,7 +93,8 @@ def save_model(model, epoch, opt, in_token2int
     transformer_encoder = model.get_transformer_encoder()
     transformer_decoder = model.get_transformer_decoder()
     position_embedder = model.get_position_encoder()
-    token_embedder = model.get_token_embedder()
+    enc_token_embedder = model.get_enc_token_embedder()
+    dec_token_embedder = model.get_dec_token_embedder()
     fc = model.get_fc()
         
     args = {
@@ -107,7 +108,8 @@ def save_model(model, epoch, opt, in_token2int
         'optimizer_state_dict': opt.optimizer.state_dict(),
         'transformer_encoder' : transformer_encoder,
         'transformer_decoder' : transformer_decoder,
-        'token_embedder': token_embedder,
+        'encoder_token_embedder': enc_token_embedder,
+        'decoder_token_embedder' : dec_token_embedder,
         'positon_embedder' : position_embedder,
         'fc' : fc,
         'optimizer_params': {
@@ -139,7 +141,9 @@ def load_model(load_path, device):
     out_token2int = checkpoint['out_token2int']
     out_int2token = checkpoint['out_int2token']
     
-    token_embedder = checkpoint['token_embedder']
+    encoder_token_embedder = checkpoint['encoder_token_embedder']
+    decoder_token_embedder = checkpoint['decoder_token_embedder']
+
     position_embedder = checkpoint['positon_embedder']
     transformer_encoder = checkpoint['transformer_encoder'].cuda()
     transformer_decoder = checkpoint['transformer_decoder'].cuda()   
@@ -148,4 +152,4 @@ def load_model(load_path, device):
     
     fc = checkpoint['fc']
     
-    return model, in_token2int, out_int2token, out_token2int, token_embedder, position_embedder, transformer_encoder, transformer_decoder, fc
+    return model, in_token2int, out_int2token, out_token2int, encoder_token_embedder, decoder_token_embedder, position_embedder, transformer_encoder, transformer_decoder, fc
